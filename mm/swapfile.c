@@ -993,7 +993,7 @@ int swap_type_of(dev_t device, sector_t offset, struct block_device **bdev_p)
 	if (device)
 		bdev = bdget(device);
 
-	spin_lock(&swap_lock);
+	spin_lock_bh(&swap_lock);
 	for (type = 0; type < nr_swapfiles; type++) {
 		struct swap_info_struct *sis = swap_info[type];
 
@@ -1004,7 +1004,7 @@ int swap_type_of(dev_t device, sector_t offset, struct block_device **bdev_p)
 			if (bdev_p)
 				*bdev_p = bdgrab(sis->bdev);
 
-			spin_unlock(&swap_lock);
+			spin_unlock_bh(&swap_lock);
 			return type;
 		}
 		if (bdev == sis->bdev) {
@@ -1014,13 +1014,13 @@ int swap_type_of(dev_t device, sector_t offset, struct block_device **bdev_p)
 				if (bdev_p)
 					*bdev_p = bdgrab(sis->bdev);
 
-				spin_unlock(&swap_lock);
+				spin_unlock_bh(&swap_lock);
 				bdput(bdev);
 				return type;
 			}
 		}
 	}
-	spin_unlock(&swap_lock);
+	spin_unlock_bh(&swap_lock);
 	if (bdev)
 		bdput(bdev);
 
@@ -1052,7 +1052,7 @@ unsigned int count_swap_pages(int type, int free)
 {
 	unsigned int n = 0;
 
-	spin_lock(&swap_lock);
+	spin_lock_bh(&swap_lock);
 	if ((unsigned int)type < nr_swapfiles) {
 		struct swap_info_struct *sis = swap_info[type];
 
@@ -1064,7 +1064,7 @@ unsigned int count_swap_pages(int type, int free)
 		}
 		spin_unlock(&sis->lock);
 	}
-	spin_unlock(&swap_lock);
+	spin_unlock_bh(&swap_lock);
 	return n;
 }
 #endif /* CONFIG_HIBERNATION */
@@ -1783,20 +1783,20 @@ static void enable_swap_info(struct swap_info_struct *p, int prio,
 				unsigned long *frontswap_map)
 {
 	frontswap_init(p->type, frontswap_map);
-	spin_lock(&swap_lock);
+	spin_lock_bh(&swap_lock);
 	spin_lock(&p->lock);
 	 _enable_swap_info(p, prio, swap_map, cluster_info);
 	spin_unlock(&p->lock);
-	spin_unlock(&swap_lock);
+	spin_unlock_bh(&swap_lock);
 }
 
 static void reinsert_swap_info(struct swap_info_struct *p)
 {
-	spin_lock(&swap_lock);
+	spin_lock_bh(&swap_lock);
 	spin_lock(&p->lock);
 	_enable_swap_info(p, p->prio, p->swap_map, p->cluster_info);
 	spin_unlock(&p->lock);
-	spin_unlock(&swap_lock);
+	spin_unlock_bh(&swap_lock);
 }
 
 SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
@@ -1827,7 +1827,7 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 		goto out;
 
 	mapping = victim->f_mapping;
-	spin_lock(&swap_lock);
+	spin_lock_bh(&swap_lock);
 	plist_for_each_entry(p, &swap_active_head, list) {
 		if (p->flags & SWP_WRITEOK) {
 			if (p->swap_file->f_mapping == mapping) {
@@ -1838,14 +1838,14 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 	}
 	if (!found) {
 		err = -EINVAL;
-		spin_unlock(&swap_lock);
+		spin_unlock_bh(&swap_lock);
 		goto out_dput;
 	}
 	if (!security_vm_enough_memory_mm(current->mm, p->pages))
 		vm_unacct_memory(p->pages);
 	else {
 		err = -ENOMEM;
-		spin_unlock(&swap_lock);
+		spin_unlock_bh(&swap_lock);
 		goto out_dput;
 	}
 	spin_lock(&swap_avail_lock);
@@ -1867,7 +1867,7 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 	total_swap_pages -= p->pages;
 	p->flags &= ~SWP_WRITEOK;
 	spin_unlock(&p->lock);
-	spin_unlock(&swap_lock);
+	spin_unlock_bh(&swap_lock);
 
 	set_current_oom_origin();
 	err = try_to_unuse(p->type, false, 0); /* force unuse all pages */
@@ -1886,7 +1886,7 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 		free_swap_count_continuations(p);
 
 	mutex_lock(&swapon_mutex);
-	spin_lock(&swap_lock);
+	spin_lock_bh(&swap_lock);
 	spin_lock(&p->lock);
 	drain_mmlist();
 
@@ -1894,9 +1894,9 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 	p->highest_bit = 0;		/* cuts scans short */
 	while (p->flags >= SWP_SCANNING) {
 		spin_unlock(&p->lock);
-		spin_unlock(&swap_lock);
+		spin_unlock_bh(&swap_lock);
 		schedule_timeout_uninterruptible(1);
-		spin_lock(&swap_lock);
+		spin_lock_bh(&swap_lock);
 		spin_lock(&p->lock);
 	}
 
@@ -1910,7 +1910,7 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 	p->cluster_info = NULL;
 	frontswap_map = frontswap_map_get(p);
 	spin_unlock(&p->lock);
-	spin_unlock(&swap_lock);
+	spin_unlock_bh(&swap_lock);
 	frontswap_invalidate_area(p->type);
 	frontswap_map_set(p, NULL);
 	mutex_unlock(&swapon_mutex);
@@ -1939,9 +1939,9 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 	 * can reuse this swap_info in alloc_swap_info() safely.  It is ok to
 	 * not hold p->lock after we cleared its SWP_WRITEOK.
 	 */
-	spin_lock(&swap_lock);
+	spin_lock_bh(&swap_lock);
 	p->flags = 0;
-	spin_unlock(&swap_lock);
+	spin_unlock_bh(&swap_lock);
 
 	err = 0;
 	atomic_inc(&proc_poll_event);
@@ -2098,13 +2098,13 @@ static struct swap_info_struct *alloc_swap_info(void)
 	if (!p)
 		return ERR_PTR(-ENOMEM);
 
-	spin_lock(&swap_lock);
+	spin_lock_bh(&swap_lock);
 	for (type = 0; type < nr_swapfiles; type++) {
 		if (!(swap_info[type]->flags & SWP_USED))
 			break;
 	}
 	if (type >= MAX_SWAPFILES) {
-		spin_unlock(&swap_lock);
+		spin_unlock_bh(&swap_lock);
 		kfree(p);
 		return ERR_PTR(-EPERM);
 	}
@@ -2130,7 +2130,7 @@ static struct swap_info_struct *alloc_swap_info(void)
 	plist_node_init(&p->list, 0);
 	plist_node_init(&p->avail_list, 0);
 	p->flags = SWP_USED;
-	spin_unlock(&swap_lock);
+	spin_unlock_bh(&swap_lock);
 	spin_lock_init(&p->lock);
 
 	return p;
@@ -2536,10 +2536,10 @@ bad_swap:
 	}
 	destroy_swap_extents(p);
 	swap_cgroup_swapoff(p->type);
-	spin_lock(&swap_lock);
+	spin_lock_bh(&swap_lock);
 	p->swap_file = NULL;
 	p->flags = 0;
-	spin_unlock(&swap_lock);
+	spin_unlock_bh(&swap_lock);
 	vfree(swap_map);
 	vfree(cluster_info);
 	if (swap_file) {
@@ -2566,7 +2566,7 @@ void si_swapinfo(struct sysinfo *val)
 	unsigned int type;
 	unsigned long nr_to_be_unused = 0;
 
-	spin_lock(&swap_lock);
+	spin_lock_bh(&swap_lock);
 	for (type = 0; type < nr_swapfiles; type++) {
 		struct swap_info_struct *si = swap_info[type];
 
@@ -2575,7 +2575,7 @@ void si_swapinfo(struct sysinfo *val)
 	}
 	val->freeswap = atomic_long_read(&nr_swap_pages) + nr_to_be_unused;
 	val->totalswap = total_swap_pages + nr_to_be_unused;
-	spin_unlock(&swap_lock);
+	spin_unlock_bh(&swap_lock);
 }
 
 /*
